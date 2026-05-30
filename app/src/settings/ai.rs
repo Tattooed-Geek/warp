@@ -1353,6 +1353,33 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.warp_agent.other.auto_handoff_on_sleep_enabled",
         description: "Whether Warp automatically hands off local agent conversations to cloud when the computer is about to sleep.",
     }
+
+    // When true, Warp-provided models (e.g. "auto", GPT-4o, Claude Sonnet, etc.) are hidden
+    // from the model picker. Only user-configured custom endpoint models are shown.
+    // Has no effect if no custom endpoints are configured.
+    hide_warp_provided_models: HideWarpProvidedModels {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.other.hide_warp_provided_models",
+        description: "When enabled, hides Warp-provided models from the model picker and only shows your custom endpoint models.",
+    }
+
+    // When true, Warp will not automatically fall back to the Warp "auto" model if the
+    // user's selected custom endpoint model becomes unavailable. Instead, requests will
+    // fail with an error until the user manually selects a valid model.
+    // Has no effect if no custom endpoints are configured.
+    disable_warp_model_fallback: DisableWarpModelFallback {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.other.disable_warp_model_fallback",
+        description: "When enabled, prevents automatic fallback to Warp default models if your custom endpoint model is unavailable.",
+    }
 ]);
 
 impl AISettings {
