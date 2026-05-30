@@ -17,8 +17,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      # rust-toolchain.toml pins 1.92.0 which is not yet released.
+      # We override to the latest stable so cargo check can run.
+      - name: Install Rust toolchain (stable override)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt,clippy
+
+      - name: Override toolchain for this workspace
+        run: rustup override set stable
 
       - name: Cache Cargo registry & build artifacts
         uses: actions/cache@v4
