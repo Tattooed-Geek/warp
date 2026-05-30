@@ -628,6 +628,37 @@ impl LLMPreferences {
         me
     }
 
+    /// Returns `true` when the user has opted to hide Warp-provided models
+    /// **and** has at least one custom provider configured so there is something
+    /// left to show in the picker.
+    fn should_hide_warp_models(app: &AppContext) -> bool {
+        use crate::settings::AISettings;
+        let hide = app
+            .user_settings::<AISettings>()
+            .hide_warp_provided_models
+            .unwrap_or(false);
+        if !hide {
+            return false;
+        }
+        // Only suppress Warp models when the user actually has custom ones to fall back to.
+        let has_custom = !ApiKeyManager::as_ref(app)
+            .keys()
+            .custom_endpoints
+            .is_empty();
+        hide && has_custom && Self::custom_inference_enabled(app)
+    }
+
+    /// Returns `true` when the fallback to a Warp-provided default model
+    /// should be suppressed (i.e. return the first custom model instead, or
+    /// `None` if the caller can handle absence).
+    fn should_disable_warp_fallback(app: &AppContext) -> bool {
+        use crate::settings::AISettings;
+        app.user_settings::<AISettings>()
+            .disable_warp_model_fallback
+            .unwrap_or(false)
+            && Self::should_hide_warp_models(app)
+    }
+
     /// Returns the `LLMInfo` for the base LLM to be used for an Agent Mode request.
     pub fn get_active_base_model<'a>(
         &'a self,
@@ -669,7 +700,16 @@ impl LLMPreferences {
                     .info_for_id(&id)
                     .or_else(|| self.custom_llm_info_for_id_if_enabled(&id, app))
             })
-            .unwrap_or_else(|| self.models_by_feature.agent_mode.default_llm_info())
+            .unwrap_or_else(|| {
+                if Self::should_disable_warp_fallback(app) {
+                    // Prefer the first available custom model over the Warp default.
+                    self.custom_llms
+                        .first()
+                        .unwrap_or_else(|| self.models_by_feature.agent_mode.default_llm_info())
+                } else {
+                    self.models_by_feature.agent_mode.default_llm_info()
+                }
+            })
     }
 
     pub fn get_active_coding_model<'a>(
@@ -698,7 +738,15 @@ impl LLMPreferences {
                     .info_for_id(&id)
                     .or_else(|| self.custom_llm_info_for_id_if_enabled(&id, app))
             })
-            .unwrap_or_else(|| self.models_by_feature.coding.default_llm_info())
+            .unwrap_or_else(|| {
+                if Self::should_disable_warp_fallback(app) {
+                    self.custom_llms
+                        .first()
+                        .unwrap_or_else(|| self.models_by_feature.coding.default_llm_info())
+                } else {
+                    self.models_by_feature.coding.default_llm_info()
+                }
+            })
     }
 
     /// Returns the set of LLMs available for Agent Mode use.
@@ -706,32 +754,48 @@ impl LLMPreferences {
         &self,
         app: &AppContext,
     ) -> impl Iterator<Item = &LLMInfo> {
+        if Self::should_hide_warp_models(app) {
+            // Return only custom models — skip the Warp-provided list entirely.
+            return itertools::Either::Left(self.custom_llm_choices(app));
+        }
         // Don't show admin-disabled models in the dropdown
-        self.models_by_feature
-            .agent_mode
-            .choices
-            .iter()
-            .filter(|llm| !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled)))
-            .chain(self.custom_llm_choices(app))
+        itertools::Either::Right(
+            self.models_by_feature
+                .agent_mode
+                .choices
+                .iter()
+                .filter(|llm| !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled)))
+                .chain(self.custom_llm_choices(app)),
+        )
     }
 
     /// Returns the set of LLMs available for coding.
     pub fn get_coding_llm_choices(&self, app: &AppContext) -> impl Iterator<Item = &LLMInfo> {
+        if Self::should_hide_warp_models(app) {
+            return itertools::Either::Left(self.custom_llm_choices(app));
+        }
         // Don't show admin-disabled models in the dropdown
-        self.models_by_feature
-            .coding
-            .choices
-            .iter()
-            .filter(|llm| !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled)))
-            .chain(self.custom_llm_choices(app))
+        itertools::Either::Right(
+            self.models_by_feature
+                .coding
+                .choices
+                .iter()
+                .filter(|llm| !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled)))
+                .chain(self.custom_llm_choices(app)),
+        )
     }
 
     /// Returns the set of LLMs available for CLI agent.
     pub fn get_cli_agent_llm_choices(&self, app: &AppContext) -> impl Iterator<Item = &LLMInfo> {
-        self.get_cli_agent_available()
-            .choices
-            .iter()
-            .chain(self.custom_llm_choices(app))
+        if Self::should_hide_warp_models(app) {
+            return itertools::Either::Left(self.custom_llm_choices(app));
+        }
+        itertools::Either::Right(
+            self.get_cli_agent_available()
+                .choices
+                .iter()
+                .chain(self.custom_llm_choices(app)),
+        )
     }
 
     /// Returns the `LLMInfo` for the CLI agent model.
@@ -752,7 +816,15 @@ impl LLMPreferences {
                     .info_for_id(&id)
                     .or_else(|| self.custom_llm_info_for_id_if_enabled(&id, app))
             })
-            .unwrap_or_else(|| available.default_llm_info())
+            .unwrap_or_else(|| {
+                if Self::should_disable_warp_fallback(app) {
+                    self.custom_llms
+                        .first()
+                        .unwrap_or_else(|| available.default_llm_info())
+                } else {
+                    available.default_llm_info()
+                }
+            })
     }
 
     /// Returns the default CLI agent model as a fallback.
@@ -1096,7 +1168,7 @@ impl LLMPreferences {
         );
     }
 
-    /// No auth required (i.e. to populate the pre-login onboarding picker).
+    /// No auth required (i.e. to populate the pre-login onboarding picker)
     fn refresh_public_models(&self, ctx: &mut ModelContext<Self>) {
         let ai_api_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         ctx.spawn(
