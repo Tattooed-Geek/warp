@@ -35,6 +35,7 @@ use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::ui_components::text_input::TextInput;
 use warpui::{AppContext, EntityId, SingletonEntity, ViewHandle, WindowId};
 
+use super::select_unique_pane_kinds;
 use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
 use crate::ai::agent_management::AgentNotificationsModel;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
@@ -55,7 +56,6 @@ use crate::pane_group::{
 };
 use crate::safe_triangle::SafeTriangle;
 use crate::tab::{tab_position_id, SelectedTabColor, TabData};
-use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::view::TerminalViewState;
@@ -126,6 +126,16 @@ const VERTICAL_TABS_SUMMARY_STATUS_ICON_SIZE: f32 = 10.;
 
 fn vtab_pane_row_position_id(pane_group_id: EntityId, pane_id: PaneId) -> String {
     format!("vertical_tabs:pane_row:{pane_group_id:?}:{pane_id}")
+}
+
+/// Save-position id for a tab group header's kebab button; anchors the group menu.
+pub(crate) fn vtab_group_kebab_position_id(tab_group_id: TabGroupId) -> String {
+    format!("vertical_tabs:group_kebab:{tab_group_id:?}")
+}
+
+/// Save-position id for a tab group's full container rect, used for drop hit-testing.
+pub(crate) fn vtab_group_position_id(group_id: TabGroupId) -> String {
+    format!("vertical_tabs:group:{group_id:?}")
 }
 
 fn terminal_title_fallback_font(agent_text: &TerminalAgentText) -> TerminalPrimaryLineFont {
@@ -754,7 +764,7 @@ enum VerticalTabsResolvedMode {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum SummaryPaneKind {
+pub(super) enum SummaryPaneKind {
     Terminal,
     OzAgent { is_ambient: bool },
     CLIAgent { agent: CLIAgent, is_ambient: bool },
@@ -773,7 +783,7 @@ enum SummaryPaneKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum SummaryPaneKindIcons {
+pub(super) enum SummaryPaneKindIcons {
     Single(SummaryPaneKind),
     Pair {
         primary: SummaryPaneKind,
@@ -915,9 +925,8 @@ fn summary_conversation_status_for_terminal(
 ) -> Option<ConversationStatus> {
     let cli_agent_session = CLIAgentSessionsModel::as_ref(app).session(terminal_view.id());
     if let Some(session) = cli_agent_session
-        .filter(|s| s.listener.is_some())
+        .filter(|s| s.supports_rich_status())
         .filter(|s| !matches!(s.agent, CLIAgent::Unknown))
-        .filter(|s| agent_supports_rich_status(&s.agent))
     {
         return Some(session.status.to_conversation_status());
     }
@@ -988,26 +997,12 @@ fn summary_search_text_fragments(
 fn select_summary_pane_kind_icons(
     pane_kinds: impl IntoIterator<Item = (EntityId, SummaryPaneKind)>,
 ) -> Option<SummaryPaneKindIcons> {
-    let mut pane_kinds: Vec<(EntityId, SummaryPaneKind)> = pane_kinds.into_iter().collect();
-    pane_kinds.sort_by_key(|(creation_order_id, _)| *creation_order_id);
-
-    let mut unique_kinds = Vec::new();
-    for (_, pane_kind) in pane_kinds {
-        if !unique_kinds.contains(&pane_kind) {
-            unique_kinds.push(pane_kind);
-        }
-        if unique_kinds.len() == 2 {
-            return Some(SummaryPaneKindIcons::Pair {
-                primary: unique_kinds[0].clone(),
-                secondary: unique_kinds[1].clone(),
-            });
-        }
+    let mut unique_kinds = select_unique_pane_kinds(pane_kinds, 2).into_iter();
+    let primary = unique_kinds.next()?;
+    match unique_kinds.next() {
+        Some(secondary) => Some(SummaryPaneKindIcons::Pair { primary, secondary }),
+        None => Some(SummaryPaneKindIcons::Single(primary)),
     }
-
-    unique_kinds
-        .first()
-        .cloned()
-        .map(SummaryPaneKindIcons::Single)
 }
 
 fn resolve_summary_pane_kind_icons(
@@ -1016,15 +1011,8 @@ fn resolve_summary_pane_kind_icons(
     app: &AppContext,
 ) -> Option<SummaryPaneKindIcons> {
     select_summary_pane_kind_icons(visible_pane_ids.iter().filter_map(|pane_id| {
-        pane_group.pane_by_id(*pane_id).map(|pane| {
-            let pane_configuration = pane.pane_configuration();
-            let pane_configuration = pane_configuration.as_ref(app);
-            let typed = pane_group.resolve_pane_type(*pane_id, app);
-            (
-                pane_id.creation_order_id(),
-                typed.summary_pane_kind(pane_configuration.title().trim(), app),
-            )
-        })
+        let kind = pane_summary_kind(pane_group, *pane_id, app)?;
+        Some((pane_id.creation_order_id(), kind))
     }))
 }
 
@@ -1743,6 +1731,7 @@ fn render_groups(
     }
 
     // Consecutive tabs sharing a group_id collapse into a single group container.
+    // TODO(johnturcoo) adopt horizontal tabs 'tab slot' pattern to remove this while loop.
     let total_visible = visible_tabs.len();
     let mut i = 0;
     while i < total_visible {
@@ -2236,28 +2225,44 @@ fn render_tab_group_internal(
 
     let group_element = group_element.with_defer_events_to_children().finish();
 
-    let draggable = Draggable::new(tab.draggable_state.clone(), group_element)
-        .on_drag_start(|ctx, _, _| {
-            ctx.dispatch_typed_action(WorkspaceAction::StartTabDrag);
-        })
-        .on_drag(move |ctx, _, rect, _| {
-            ctx.dispatch_typed_action(WorkspaceAction::DragTab {
-                tab_index,
-                tab_position: rect,
-            });
-        })
-        .on_drop(|ctx, _, _, _| {
-            ctx.dispatch_typed_action(WorkspaceAction::DropTab);
-        });
-    // Only lock the drag to the vertical axis when cross-window tab drag is
-    // disabled. When it is enabled, the user needs to be able to drag
-    // horizontally out of the panel to detach the tab into a new window.
-    let draggable = if FeatureFlag::DragTabsToWindows.is_enabled() {
-        draggable
+    // Skip the per-tab drag while the enclosing group is already being dragged as a block.
+    let is_parent_group_dragging = tab
+        .group_id
+        .and_then(|gid| workspace.tab_groups.get(&gid))
+        .is_some_and(|group| group.draggable_state.is_dragging());
+
+    // Sole group member: skip the per-tab drag so the outer group drag fires instead.
+    let is_sole_group_member = in_tab_group
+        && tab
+            .group_id
+            .is_some_and(|gid| super::group_member_indices(&workspace.tabs, gid).count() == 1);
+
+    let draggable: Box<dyn Element> = if is_parent_group_dragging || is_sole_group_member {
+        group_element
     } else {
-        draggable.with_drag_axis(DragAxis::VerticalOnly)
+        let draggable = Draggable::new(tab.draggable_state.clone(), group_element)
+            .on_drag_start(|ctx, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::StartTabDrag);
+            })
+            .on_drag(move |ctx, _, rect, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::DragTab {
+                    tab_index,
+                    tab_position: rect,
+                });
+            })
+            .on_drop(|ctx, _, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::DropTab);
+            });
+        // Only lock the drag to the vertical axis when cross-window tab drag is
+        // disabled. When it is enabled, the user needs to be able to drag
+        // horizontally out of the panel to detach the tab into a new window.
+        let draggable = if FeatureFlag::DragTabsToWindows.is_enabled() {
+            draggable
+        } else {
+            draggable.with_drag_axis(DragAxis::VerticalOnly)
+        };
+        draggable.finish()
     };
-    let draggable = draggable.finish();
 
     let draggable: Box<dyn Element> = if is_this_tab_dragging {
         Container::new(draggable)
@@ -2430,7 +2435,9 @@ fn render_tab_group_header_icon_button(
 }
 
 /// Renders the header row for a tab group: chevron, title + "N tabs", and (on hover)
-/// kebab + close buttons. Single-clicking outside the per-button regions toggles collapse.
+/// kebab + close buttons. Single-clicking outside the per-button regions toggles collapse;
+/// double-clicking opens the inline rename editor.
+#[allow(clippy::too_many_arguments)]
 fn render_grouped_tabs_header(
     group: &TabGroup,
     member_count: usize,
@@ -2438,6 +2445,8 @@ fn render_grouped_tabs_header(
     is_collapsed: bool,
     is_header_selected: bool,
     show_action_buttons: bool,
+    is_being_renamed: bool,
+    rename_editor: Option<&ViewHandle<EditorView>>,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
@@ -2473,14 +2482,19 @@ fn render_grouped_tabs_header(
     .with_height(VERTICAL_TABS_ICON_SIZE)
     .finish();
 
-    let title_text = group
-        .name
-        .clone()
-        .unwrap_or_else(|| "New Group".to_string());
-    let title_element: Box<dyn Element> = Text::new_inline(title_text, font_family, 12.)
-        .with_clip(ClipConfig::ellipsis())
-        .with_color(main_text_color.into())
-        .finish();
+    let title_element: Box<dyn Element> =
+        if let Some(editor) = rename_editor.filter(|_| is_being_renamed) {
+            render_inline_tab_rename_editor(editor, appearance, app)
+        } else {
+            let title_text = group
+                .name
+                .clone()
+                .unwrap_or_else(|| "New Group".to_string());
+            Text::new_inline(title_text, font_family, 12.)
+                .with_clip(ClipConfig::ellipsis())
+                .with_color(main_text_color.into())
+                .finish()
+        };
     let subtitle_text = if member_count == 1 {
         "1 tab".to_string()
     } else {
@@ -2499,15 +2513,21 @@ fn render_grouped_tabs_header(
         .finish();
 
     let action_buttons = if show_action_buttons {
-        let kebab_button = render_tab_group_header_icon_button(
-            WarpIcon::DotsVertical,
-            TAB_GROUP_HEADER_ACTION_ICON_SIZE,
-            sub_text_color,
-            internal_colors::fg_overlay_2(theme),
-            mouse_states.kebab.clone(),
-            // No-op for now; TODO(johnturcoo) add tab group more-options menu.
-            None,
-        );
+        let kebab_button = SavePosition::new(
+            render_tab_group_header_icon_button(
+                WarpIcon::DotsVertical,
+                TAB_GROUP_HEADER_ACTION_ICON_SIZE,
+                sub_text_color,
+                internal_colors::fg_overlay_2(theme),
+                mouse_states.kebab.clone(),
+                Some(WorkspaceAction::ToggleTabGroupRightClickMenu {
+                    group_id,
+                    anchor: TabContextMenuAnchor::VerticalTabsKebab,
+                }),
+            ),
+            &vtab_group_kebab_position_id(group_id),
+        )
+        .finish();
         let close_button = render_tab_group_header_icon_button(
             WarpIcon::X,
             TAB_GROUP_HEADER_ACTION_ICON_SIZE,
@@ -2565,12 +2585,19 @@ fn render_grouped_tabs_header(
     .with_cursor(Cursor::PointingHand)
     .with_defer_events_to_children();
 
-    // Single-click toggles collapse; no-op `on_right_click` keeps right-clicks from bubbling
-    // up to the panel's new-session menu handler.
+    // Click toggles collapse; double-click renames; right-click opens the group menu.
     hoverable = hoverable.on_click(move |ctx, _, _| {
         ctx.dispatch_typed_action(WorkspaceAction::ToggleTabGroupCollapsed(group_id));
     });
-    hoverable = hoverable.on_right_click(|_, _, _| {});
+    hoverable = hoverable.on_double_click(move |ctx, _, _| {
+        ctx.dispatch_typed_action(WorkspaceAction::RenameTabGroup(group_id));
+    });
+    hoverable = hoverable.on_right_click(move |ctx, _, position| {
+        ctx.dispatch_typed_action(WorkspaceAction::ToggleTabGroupRightClickMenu {
+            group_id,
+            anchor: TabContextMenuAnchor::Pointer(position),
+        });
+    });
     hoverable.finish()
 }
 
@@ -2596,6 +2623,7 @@ fn render_grouped_tab_container(
         .clone();
 
     let member_count = members.len();
+    let group_id = group.id;
     let group = group.clone();
     let any_member_active = members
         .iter()
@@ -2608,7 +2636,7 @@ fn render_grouped_tab_container(
         _ => VerticalTabsDisplayGranularity::Tabs,
     });
 
-    Hoverable::new(mouse_states.container.clone(), |hover_state| {
+    let container = Hoverable::new(mouse_states.container.clone(), |hover_state| {
         let mut content = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -2616,6 +2644,10 @@ fn render_grouped_tab_container(
 
         // Collapsed group + active member: highlight the header instead of the (now hidden) member row.
         let is_header_selected = is_collapsed && any_member_active;
+        let is_being_renamed = workspace
+            .current_workspace_state
+            .is_tab_group_being_renamed(group.id);
+        let rename_editor = is_being_renamed.then(|| workspace.tab_group_rename_editor.clone());
         content.add_child(render_grouped_tabs_header(
             &group,
             member_count,
@@ -2623,6 +2655,8 @@ fn render_grouped_tab_container(
             is_collapsed,
             is_header_selected,
             hover_state.is_hovered(),
+            is_being_renamed,
+            rename_editor.as_ref(),
             app,
         ));
 
@@ -2684,10 +2718,57 @@ fn render_grouped_tab_container(
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)))
             .finish()
     })
-    // Consume right-clicks so they don't bubble to the panel's new-session menu handler.
-    .on_right_click(|_, _, _| {})
+    // Right-click on group chrome (not member rows) opens the group menu.
+    .on_right_click(move |ctx, _, position| {
+        ctx.dispatch_typed_action(WorkspaceAction::ToggleTabGroupRightClickMenu {
+            group_id,
+            anchor: TabContextMenuAnchor::Pointer(position),
+        });
+    })
     .with_defer_events_to_children()
-    .finish()
+    .finish();
+    // Skip the group `Draggable` while a pane is being dragged so pane
+    // reordering (within the active tab's split layout) doesn't fight with
+    // group-block reordering for the same mouse input.
+    let skip_group_draggable = is_any_pane_dragging;
+    let is_this_group_dragging = group.draggable_state.is_dragging();
+    let group_draggable_state = group.draggable_state.clone();
+    let positioned_container: Box<dyn Element> = if skip_group_draggable {
+        container
+    } else {
+        Draggable::new(group_draggable_state, container)
+            .on_drag_start(move |ctx, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::StartGroupDrag(group_id));
+            })
+            .on_drag(move |ctx, _, rect, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::DragGroup {
+                    group_id,
+                    position: rect,
+                });
+            })
+            .on_drop(move |ctx, _, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::DropGroup);
+            })
+            .with_drag_axis(DragAxis::VerticalOnly)
+            // Yield to a nested per-tab `Draggable` when it claims the mouse-down.
+            // This allows dragging a tab within a group, without triggering the groups `Draggable`.
+            .with_defer_to_handled_child_mouse_down()
+            .finish()
+    };
+
+    // Ghost slot: while dragging, the `Draggable` paints to the overlay
+    // layer, vacating the laid-out slot. Fill it with a background
+    // placeholder so the user sees where the group will land.
+    let positioned_container: Box<dyn Element> = if is_this_group_dragging {
+        Container::new(positioned_container)
+            .with_background(internal_colors::fg_overlay_1(theme))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)))
+            .finish()
+    } else {
+        positioned_container
+    };
+
+    SavePosition::new(positioned_container, &vtab_group_position_id(group_id)).finish()
 }
 
 fn render_group_header(props: GroupHeaderProps<'_>, app: &AppContext) -> Box<dyn Element> {
@@ -3667,6 +3748,28 @@ impl PaneGroup {
     }
 }
 
+/// Returns the [`SummaryPaneKind`] representing how the given pane should
+/// be rendered visually, matching the treatment used by vertical tabs
+/// Summary mode. For Terminal panes, distinguishes Oz vs Oz cloud vs each
+/// known CLI agent (Claude, Codex, …) by routing through
+/// `terminal_view_agent_icon_variant`; for other pane types it falls back
+/// to `TypedPane::summary_pane_kind`. Returns `None` when `pane_id` does
+/// not resolve to a pane in `pane_group` so callers can skip stale ids
+/// via `filter_map`; note this is distinct from a known pane that
+/// classifies as `SummaryPaneKind::Other`.
+pub(super) fn pane_summary_kind(
+    pane_group: &PaneGroup,
+    pane_id: PaneId,
+    app: &AppContext,
+) -> Option<SummaryPaneKind> {
+    let pane = pane_group.pane_by_id(pane_id)?;
+    let pane_configuration = pane.pane_configuration();
+    let pane_configuration = pane_configuration.as_ref(app);
+    let title = pane_configuration.title().trim();
+    let typed = pane_group.resolve_pane_type(pane_id, app);
+    Some(typed.summary_pane_kind(title, app))
+}
+
 /// Returns the best available working-directory string for a terminal pane,
 /// incorporating cloud environment name and setup status for ambient agent sessions.
 fn resolved_terminal_working_directory(
@@ -3927,7 +4030,7 @@ fn render_text_line(
         .finish()
 }
 
-fn render_inline_tab_rename_editor(
+pub(crate) fn render_inline_tab_rename_editor(
     rename_editor: &ViewHandle<EditorView>,
     appearance: &Appearance,
     app: &AppContext,
@@ -4034,7 +4137,7 @@ fn render_summary_tab_item(
     let main_text_color = theme.main_text_color(theme.background());
     let sub_text_color = theme.sub_text_color(theme.background());
     let icon = summary_pane_kind_icons
-        .map(|icons| render_summary_pane_kind_icons(icons, appearance))
+        .map(|icons| render_summary_pane_kind_icons(icons, VERTICAL_TABS_ICON_SIZE, appearance))
         .unwrap_or_else(|| {
             render_pane_icon_with_status(
                 resolve_icon_with_status_variant(&props.typed, &props.title, appearance, app),
@@ -4261,20 +4364,21 @@ fn render_summary_overflow_line(
     .finish()
 }
 
-fn render_summary_pane_kind_icons(
+pub(super) fn render_summary_pane_kind_icons(
     icons: SummaryPaneKindIcons,
+    total_size: f32,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     match icons {
         SummaryPaneKindIcons::Single(kind) => {
-            render_summary_pane_kind_icon_circle(kind, VERTICAL_TABS_ICON_SIZE, appearance)
+            render_summary_pane_kind_icon_circle(kind, total_size, appearance)
         }
         SummaryPaneKindIcons::Pair { primary, secondary } => {
             // The secondary icon sits at the BR of the primary at roughly badge
             // proportions, with a small cutout ring separating it from the primary.
-            let primary_total = VERTICAL_TABS_ICON_SIZE;
-            let secondary_total = VERTICAL_TABS_ICON_SIZE * 0.5;
+            let primary_total = total_size;
+            let secondary_total = total_size * 0.5;
             let ring_padding = secondary_total * 0.1;
             let primary_icon =
                 render_summary_pane_kind_icon_circle(primary, primary_total, appearance);
@@ -4323,7 +4427,7 @@ fn render_summary_pane_kind_icons(
 const SUMMARY_INLINE_ICON_RATIO: f32 = 2. / 3.;
 const SUMMARY_INLINE_PADDING_RATIO: f32 = (1. - SUMMARY_INLINE_ICON_RATIO) / 2.;
 
-fn render_summary_pane_kind_icon_circle(
+pub(super) fn render_summary_pane_kind_icon_circle(
     kind: SummaryPaneKind,
     total_size: f32,
     appearance: &Appearance,
@@ -6070,9 +6174,7 @@ fn render_terminal_detail_section(
     let (conversation_display_title, cli_agent_title) =
         preferred_agent_tab_titles(&agent_text, agent_tab_text_preference(app));
     let kind_label = terminal_kind_badge_label(agent_text.is_oz_agent, agent_text.cli_agent);
-    let status = if let Some(session) =
-        cli_agent_session.filter(|s| s.listener.is_some() && agent_supports_rich_status(&s.agent))
-    {
+    let status = if let Some(session) = cli_agent_session.filter(|s| s.supports_rich_status()) {
         Some(session.status.to_conversation_status())
     } else if agent_text.is_oz_agent {
         terminal_view.selected_conversation_status_for_display(app)
