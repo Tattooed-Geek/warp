@@ -5,6 +5,7 @@ use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndp
 pub use ai::LLMId;
 use parking_lot::FairMutex;
 use serde::{de, Deserialize, Serialize};
+use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
 use warp_core::user_preferences::GetUserPreferences;
@@ -633,15 +634,11 @@ impl LLMPreferences {
         me
     }
 
-    /// Returns `true` when the user has opted to hide Warp-provided models
-    /// **and** has at least one custom provider configured so there is something
-    /// left to show in the picker.
     fn should_hide_warp_models(app: &AppContext) -> bool {
         use crate::settings::AISettings;
-        let hide = app
-            .user_settings::<AISettings>()
+        let hide = *AISettings::as_ref(app)
             .hide_warp_provided_models
-            .unwrap_or(false);
+            .value();
         if !hide {
             return false;
         }
@@ -658,9 +655,9 @@ impl LLMPreferences {
     /// `None` if the caller can handle absence).
     fn should_disable_warp_fallback(app: &AppContext) -> bool {
         use crate::settings::AISettings;
-        app.user_settings::<AISettings>()
+        *AISettings::as_ref(app)
             .disable_warp_model_fallback
-            .unwrap_or(false)
+            .value()
             && Self::should_hide_warp_models(app)
     }
 
