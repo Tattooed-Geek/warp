@@ -6,10 +6,7 @@
 
 name: Cut New Releases
 on:
-  schedule:
-    # Run this job every morning at 3am EST.
-    - cron: "0 8 * * *"
-
+  # Disabled automatic scheduled triggers; run only when manually dispatched.
   workflow_dispatch:
     inputs:
       targets:

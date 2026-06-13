@@ -14,8 +14,7 @@
 
 name: Close Stale Fix PRs
 on:
-  schedule:
-    - cron: '0 12 * * *' # 8am EST
+  # Disabled automatic scheduled trigger; run only when manually dispatched.
   workflow_dispatch:
 
 jobs:

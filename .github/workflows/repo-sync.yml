@@ -1,10 +1,6 @@
 name: Repo Sync
 on:
-  push:
-    branches: [master]
-  pull_request:
-    types: [closed, opened, synchronize, edited, labeled]
-    branches: [master]
+  # Disabled automatic push/pull_request triggers; run only when manually dispatched.
   workflow_dispatch:
     inputs:
       action:

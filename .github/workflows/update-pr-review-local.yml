@@ -1,7 +1,6 @@
 name: Update PR Review Skill (Local)
 on:
-  schedule:
-    - cron: '0 9 * * 1'  # Every Monday at 09:00 UTC
+  # Disabled automatic scheduled trigger; run only when manually dispatched.
   workflow_dispatch:
     inputs:
       lookback_days:

@@ -1,13 +1,6 @@
 on:
-  pull_request:
-    branches:
-      - 'master'
-      - '*_release/*'
-    types:
-      - opened
-      - reopened
-      - synchronize
-      - ready_for_review
+  # Disabled automatic CI triggers; run only when manually dispatched or called
+  # by another workflow.
   workflow_dispatch:
     inputs:
       runner_type:

@@ -1,7 +1,6 @@
 name: Update Dedupe Skill (Local)
 on:
-  schedule:
-    - cron: '30 9 * * 1'  # Every Monday at 09:30 UTC
+  # Disabled automatic scheduled trigger; run only when manually dispatched.
   workflow_dispatch:
     inputs:
       lookback_days:
