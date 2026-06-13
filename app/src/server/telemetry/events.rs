@@ -1398,6 +1398,10 @@ pub enum TelemetryEvent {
     SSHControlMasterError {
         has_remote_server: bool,
     },
+    SshConnectionCreated,
+    SshConnectionEdited,
+    SshConnectionDeleted,
+    SshConnectionLaunched,
     KeybindingChanged {
         action: String,
         keystroke: Keystroke,
@@ -4276,6 +4280,10 @@ impl TelemetryEvent {
             TelemetryEvent::SSHControlMasterError { has_remote_server } => Some(json!({
                 "has_remote_server": has_remote_server,
             })),
+            TelemetryEvent::SshConnectionCreated
+            | TelemetryEvent::SshConnectionEdited
+            | TelemetryEvent::SshConnectionDeleted
+            | TelemetryEvent::SshConnectionLaunched => None,
             TelemetryEvent::RemoteServerBinaryCheck {
                 found,
                 error,
@@ -5303,7 +5311,11 @@ impl TelemetryEvent {
             | TelemetryEvent::RemoteServerReconnection { .. }
             | TelemetryEvent::RemoteServerReconnectExhausted { .. }
             | TelemetryEvent::RemoteCodebaseIndexStatusChanged { .. }
-            | TelemetryEvent::RemoteCodebaseAutoIndexRequested { .. } => false,
+            | TelemetryEvent::RemoteCodebaseAutoIndexRequested { .. }
+            | TelemetryEvent::SshConnectionCreated
+            | TelemetryEvent::SshConnectionEdited
+            | TelemetryEvent::SshConnectionDeleted
+            | TelemetryEvent::SshConnectionLaunched => false,
             #[cfg(feature = "local_fs")]
             TelemetryEvent::CodePaneOpened { .. }
             | TelemetryEvent::CodePanelsFileOpened { .. }
@@ -5488,6 +5500,10 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::DownloadSource => EnablementState::Always,
             Self::SSHBootstrapAttempt => EnablementState::Always,
             Self::SSHControlMasterError => EnablementState::Always,
+            Self::SshConnectionCreated => EnablementState::Always,
+            Self::SshConnectionEdited => EnablementState::Always,
+            Self::SshConnectionDeleted => EnablementState::Always,
+            Self::SshConnectionLaunched => EnablementState::Always,
             Self::KeybindingChanged => EnablementState::Always,
             Self::KeybindingResetToDefault => EnablementState::Always,
             Self::KeybindingRemoved => EnablementState::Always,
@@ -6005,6 +6021,10 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::BaselineCommandLatency => "BaselineCommand Latency",
             Self::SSHBootstrapAttempt => "SSH Bootstrap Attempt",
             Self::SSHControlMasterError => "SSH ControlMaster Error",
+            Self::SshConnectionCreated => "SSH Connection Created",
+            Self::SshConnectionEdited => "SSH Connection Edited",
+            Self::SshConnectionDeleted => "SSH Connection Deleted",
+            Self::SshConnectionLaunched => "SSH Connection Launched",
             Self::SetNewWindowsAtCustomSize => "Set New Windows at Custom Size",
             Self::ToggleNewWindowsAtCustomSize => "Toggle New Windows at Custom Size",
             Self::KeybindingChanged => "Keybinding Changed",
@@ -6611,6 +6631,10 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::SSHControlMasterError => {
                 "Encountered a ControlMaster error during an SSH session"
             }
+            Self::SshConnectionCreated => "User created a saved SSH connection",
+            Self::SshConnectionEdited => "User edited a saved SSH connection",
+            Self::SshConnectionDeleted => "User deleted a saved SSH connection",
+            Self::SshConnectionLaunched => "User launched a saved SSH connection",
             Self::KeybindingChanged => "Edited a custom keybinding",
             Self::KeybindingResetToDefault => "Reset a custom keybinding to its default",
             Self::KeybindingRemoved => "Removed / cleared a keybinding",

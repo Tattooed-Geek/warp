@@ -202,6 +202,9 @@ use crate::ai::execution_profiles::editor::ExecutionProfileEditorManager;
 use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
 use crate::ai::facts::view::AIFactPage;
 use crate::ai::facts::{AIFactManager, AIFactView, AIFactViewEvent};
+use crate::ssh_connections::panel::{
+    SshConnectionsPanelEvent, SshConnectionsPanelView,
+};
 use crate::ai::llms::LLMPreferences;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai::{conversation_utils, AIRequestUsageModel};
@@ -1038,6 +1041,7 @@ pub struct Workspace {
     settings_file_error: Option<crate::settings::SettingsFileError>,
     settings_error_banner_dismissed: bool,
     ai_assistant_panel: ViewHandle<AIAssistantPanelView>,
+    ssh_connections_panel: ViewHandle<SshConnectionsPanelView>,
     should_show_ai_assistant_warm_welcome: bool,
     ai_assistant_close_warm_welcome_mouse_state_handle: MouseStateHandle,
     auth_override_warning_modal: ViewHandle<AuthOverrideWarningModal>,
@@ -2990,6 +2994,11 @@ impl Workspace {
         let ai_assistant_panel =
             Self::build_ai_assistant_panel_view(ctx, server_api.clone(), ai_client.clone());
 
+        let ssh_connections_panel = ctx.add_typed_action_view(SshConnectionsPanelView::new);
+        ctx.subscribe_to_view(&ssh_connections_panel, |me, _, event, ctx| {
+            me.handle_ssh_connections_panel_event(event, ctx);
+        });
+
         ctx.observe(&tips_completed, Workspace::on_tips_model_changed);
 
         let autoupdate_handle = AutoupdateState::handle(ctx);
@@ -3283,6 +3292,7 @@ impl Workspace {
             settings_file_error,
             settings_error_banner_dismissed: false,
             ai_assistant_panel,
+            ssh_connections_panel,
             should_show_ai_assistant_warm_welcome,
             ai_assistant_close_warm_welcome_mouse_state_handle: Default::default(),
             auth_override_warning_modal,
@@ -4630,7 +4640,31 @@ impl Workspace {
         if self.current_workspace_state.is_ai_assistant_panel_open {
             // Close the resource center panel if we open the AI Assistant panel.
             self.current_workspace_state.is_resource_center_open = false;
+            self.current_workspace_state.is_ssh_connections_panel_open = false;
             ctx.focus(&self.ai_assistant_panel);
+        } else {
+            self.focus_active_tab(ctx);
+        }
+        ctx.notify();
+    }
+
+    fn toggle_ssh_connections_panel(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.current_workspace_state.is_ssh_connections_panel_open
+            && !self.ssh_connections_panel.is_self_or_child_focused(ctx)
+            && !self.current_workspace_state.is_any_modal_open(ctx)
+        {
+            ctx.focus(&self.ssh_connections_panel);
+            return;
+        }
+
+        self.current_workspace_state.is_ssh_connections_panel_open =
+            !self.current_workspace_state.is_ssh_connections_panel_open;
+        self.current_workspace_state.close_all_modals();
+
+        if self.current_workspace_state.is_ssh_connections_panel_open {
+            self.current_workspace_state.is_resource_center_open = false;
+            self.current_workspace_state.is_ai_assistant_panel_open = false;
+            ctx.focus(&self.ssh_connections_panel);
         } else {
             self.focus_active_tab(ctx);
         }
@@ -8724,6 +8758,8 @@ impl Workspace {
 
         // Open side panel
         self.current_workspace_state.is_resource_center_open = true;
+        // Close the SSH connections panel if it was open.
+        self.current_workspace_state.is_ssh_connections_panel_open = false;
     }
 
     pub fn toggle_resource_center(&mut self, ctx: &mut ViewContext<Self>) {
@@ -9360,6 +9396,7 @@ impl Workspace {
 
             // Ensure other right panels are closed
             self.current_workspace_state.is_ai_assistant_panel_open = false;
+            self.current_workspace_state.is_ssh_connections_panel_open = false;
             // Open side panel
             self.current_workspace_state.is_resource_center_open = true;
             send_telemetry_from_ctx!(TelemetryEvent::KeybindingsPageOpened, ctx);
@@ -18228,6 +18265,25 @@ impl Workspace {
         }
     }
 
+    fn handle_ssh_connections_panel_event(
+        &mut self,
+        event: &SshConnectionsPanelEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            SshConnectionsPanelEvent::ClosePanel => {
+                self.current_workspace_state.is_ssh_connections_panel_open = false;
+                self.focus_active_tab(ctx);
+                ctx.notify();
+            }
+            SshConnectionsPanelEvent::LaunchConnection(_) => {
+                // Connection launched in new tab from panel; focus active tab
+                self.focus_active_tab(ctx);
+                ctx.notify();
+            }
+        }
+    }
+
     fn handle_openwarp_launch_modal_event(
         &mut self,
         event: &OpenWarpLaunchModalEvent,
@@ -19454,6 +19510,28 @@ impl Workspace {
         .finish()
     }
 
+    fn render_ssh_connections_button(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let is_active = self.current_workspace_state.is_ssh_connections_panel_open;
+
+        Container::new(
+            Align::new(
+                self.render_tab_bar_icon_button(
+                    appearance,
+                    icons::Icon::Terminal,
+                    &self.mouse_states.ssh_connections_icon,
+                    WorkspaceAction::ClickedSshConnectionsPanelIcon,
+                    "SSH connections".to_string(),
+                    None,
+                    is_active,
+                    false,
+                )
+                .finish(),
+            )
+            .finish(),
+        )
+        .finish()
+    }
+
     fn should_enable_file_tree_and_global_search_for_pane_group(pane_group: &PaneGroup) -> bool {
         pane_group
             .pane_ids()
@@ -20261,6 +20339,15 @@ impl Workspace {
                 )
                 .with_margin_left(TAB_BAR_PADDING_LEFT)
                 .finish(),
+            );
+        }
+
+        // SSH connections panel button
+        if FeatureFlag::SshConnectionManager.is_enabled() {
+            target.add_child(
+                Container::new(self.render_ssh_connections_button(appearance))
+                    .with_margin_left(TAB_BAR_PADDING_LEFT)
+                    .finish(),
             );
         }
 
@@ -21775,10 +21862,15 @@ impl Workspace {
                     ChildView::new(&self.ai_assistant_panel).finish(),
                     &PanelPosition::Right,
                 ))
+            } else if self.current_workspace_state.is_ssh_connections_panel_open {
+                Some(self.render_panel(
+                    app,
+                    ChildView::new(&self.ssh_connections_panel).finish(),
+                    &PanelPosition::Right,
+                ))
             } else {
                 log::warn!(
-                    "is_right_panel_open() returned true, but neither the resource center nor AI \
-                    assistant are open"
+                    "is_right_panel_open() returned true, but none of the right panels are open"
                 );
                 None
             };
@@ -23809,6 +23901,16 @@ impl TypedActionView for Workspace {
                             ctx
                         );
                     }
+                }
+            }
+            ToggleSshConnectionsPanel => {
+                if FeatureFlag::SshConnectionManager.is_enabled() {
+                    self.toggle_ssh_connections_panel(ctx);
+                }
+            }
+            ClickedSshConnectionsPanelIcon => {
+                if FeatureFlag::SshConnectionManager.is_enabled() {
+                    self.toggle_ssh_connections_panel(ctx);
                 }
             }
             ShowAIAssistantWarmWelcome => {

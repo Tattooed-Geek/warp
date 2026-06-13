@@ -42,6 +42,7 @@ pub(super) struct WorkspaceMouseStates {
     pub(super) session_config_tab_config_chip_close: MouseStateHandle,
     pub(super) tools_panel_icon: MouseStateHandle,
     pub(super) title_bar_search_bar: MouseStateHandle,
+    pub(super) ssh_connections_icon: MouseStateHandle,
     #[cfg(target_family = "wasm")]
     pub(super) warp_logo: MouseStateHandle,
 }
@@ -100,6 +101,7 @@ pub struct WorkspaceState {
     pub is_command_search_open: bool,
     pub is_warp_drive_open: bool,
     pub is_ai_assistant_panel_open: bool,
+    pub is_ssh_connections_panel_open: bool,
     pub is_agent_management_popup_open: bool,
     pub is_auth_override_modal_open: bool,
     pub is_require_login_modal_open: bool,
@@ -215,7 +217,9 @@ impl WorkspaceState {
     }
 
     pub fn is_right_panel_open(&self) -> bool {
-        self.is_resource_center_open || self.is_ai_assistant_panel_open
+        self.is_resource_center_open
+            || self.is_ai_assistant_panel_open
+            || self.is_ssh_connections_panel_open
     }
 
     pub fn is_left_panel_open(&self) -> bool {

@@ -984,8 +984,12 @@ vertical_tabs = []
 vertical_tabs_summary_mode = []
 tab_configs = []
 grouped_tabs = []
+<<<<<<< HEAD
 pinned_tabs = []
 warp_control_cli = []
+=======
+ssh_connection_manager = []
+>>>>>>> 9d25e652 (Add custom model settings feature)
 agent_harness = []
 oz_handoff = []
 handoff_local_cloud = []

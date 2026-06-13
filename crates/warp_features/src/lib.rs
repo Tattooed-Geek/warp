@@ -886,6 +886,9 @@ pub enum FeatureFlag {
     /// Gates the SuperGrok feature, which lets users
     /// connect a Grok subscription instead of pasting an API key.
     SuperGrok,
+
+    /// Enables the SSH Connection Manager panel for saving and launching SSH connections.
+    SshConnectionManager,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =

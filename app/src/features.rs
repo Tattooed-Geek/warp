@@ -447,10 +447,15 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::TabConfigs,
         #[cfg(feature = "grouped_tabs")]
         FeatureFlag::GroupedTabs,
+<<<<<<< HEAD
         #[cfg(feature = "pinned_tabs")]
         FeatureFlag::PinnedTabs,
         #[cfg(feature = "warp_control_cli")]
         FeatureFlag::WarpControlCli,
+=======
+        #[cfg(feature = "ssh_connection_manager")]
+        FeatureFlag::SshConnectionManager,
+>>>>>>> 9d25e652 (Add custom model settings feature)
         #[cfg(feature = "agent_harness")]
         FeatureFlag::AgentHarness,
         #[cfg(feature = "oz_handoff")]

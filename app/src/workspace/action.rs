@@ -308,6 +308,8 @@ pub enum WorkspaceAction {
     ToggleUserMenu,
     ToggleAIAssistant,
     ClickedAIAssistantIcon,
+    ToggleSshConnectionsPanel,
+    ClickedSshConnectionsPanelIcon,
     ToggleKeybindingsPage,
     ShowCommandSearch(CommandSearchOptions),
     CreatePersonalNotebook,
@@ -947,6 +949,8 @@ impl WorkspaceAction {
             | ToggleUserMenu
             | ClickedAIAssistantIcon
             | ToggleAIAssistant
+            | ClickedSshConnectionsPanelIcon
+            | ToggleSshConnectionsPanel
             | OpenCloudAgentSetupGuide
             | ToggleKeybindingsPage
             | ShowCommandSearch(_)
